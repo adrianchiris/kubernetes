@@ -60,7 +60,7 @@ type Store interface {
 	GetAffinity(podUID string, containerName string) TopologyHint
 }
 
-//TopologyHint is a struct containing a SocketMask for a Container
+//TopologyHint is a struct containing a SocketAffinity for a Container
 type TopologyHint struct {
 	SocketAffinity socketmask.SocketMask
 	// Preferred is set to true when the SocketMask encodes a preferred
@@ -178,6 +178,7 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 	// permutations that have at least one socket set. If no merged mask can be
 	// found that has at least one socket set, return the 'defaultHint'.
 	bestHint := defaultHint
+	klog.Infof("Moshe BestHint1: %p", &bestHint)
 	m.iterateAllProviderTopologyHints(allProviderHints, func(permutation []TopologyHint) {
 		// Get the SocketAffinity from each hint in the permutation and see if any
 		// of them encode unpreferred allocations.
@@ -212,6 +213,7 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 		// preferred, always choose the preferred hint over the non-preferred one.
 		if mergedHint.Preferred && !bestHint.Preferred {
 			bestHint = mergedHint
+			klog.Infof("Moshe BestHint2: %p", &bestHint)
 			return
 		}
 
@@ -231,8 +233,10 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 
 		// In all other cases, update bestHint to the current mergedHint
 		bestHint = mergedHint
+		klog.Infof("Moshe BestHint2: %p", &bestHint)
+		klog.Infof("Moshe: %v", mergedHint)
 	})
-
+	klog.Infof("Moshe BestHint3: %p", &bestHint)
 	klog.Infof("[topologymanager] ContainerTopologyHint: %v", bestHint)
 
 	return bestHint

@@ -13,7 +13,6 @@ import (
 func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) []topologymanager.TopologyHint {
 
 	var deviceHints []topologymanager.TopologyHint
-	admit := false
 
 	var tempMaskSet []topologymanager.TopologyHint
 	allDeviceSockets := make(map[int]bool)
@@ -65,6 +64,7 @@ func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) []top
 			tempMaskSet = nil
 		}
 	}
+	klog.Infof("[devicemanager-topology] Moshe DeviceHints: %v", deviceHints)
 
 	if containerRequiresDevice {
 		if len(allDeviceSockets) > 1 {
@@ -73,12 +73,12 @@ func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) []top
 				allDeviceSocketsInt = append(allDeviceSocketsInt, socket)
 			}
 			crossSocketMask, _ := socketmask.NewSocketMask(allDeviceSocketsInt...)
-			deviceHints = append(deviceHints, topologymanager.TopologyHint{SocketAffinity: crossSocketMask, Preferred: false})
+			deviceHints = append(deviceHints, topologymanager.TopologyHint{SocketAffinity: crossSocketMask, Preferred: true})
 		}
 		klog.Infof("[devicemanager-topology] DeviceHints: %v", deviceHints)
 	}
 
-	return deviceHints, admit
+	return deviceHints
 }
 
 func (m *ManagerImpl) getAvailableDevices(resource string) sets.String {
@@ -118,7 +118,7 @@ func getDevicesPerSocket(resource string, available sets.String, allDevices map[
 
 func checkIfMaskEqualsStoreMask(existingDeviceHints []topologymanager.TopologyHint, newMask socketmask.SocketMask) bool {
 	for _, storedHint := range existingDeviceHints {
-		if storedHint.SocketMask.IsEqual(newMask) {
+		if storedHint.SocketAffinity.IsEqual(newMask) {
 			return true
 		}
 	}
