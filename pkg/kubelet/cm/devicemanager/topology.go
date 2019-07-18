@@ -10,22 +10,20 @@ import (
 )
 
 //GetTopologyHints implements the TopologyManager HintProvider Interface which ensures the Device Manager is consulted when Topology Aware Hints for each container are created
-func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) []topologymanager.TopologyHint {
-
-	var deviceHints []topologymanager.TopologyHint
+func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) map[string][]topologymanager.TopologyHint {
 
 	var tempMaskSet []topologymanager.TopologyHint
 	allDeviceSockets := make(map[int]bool)
 
-	firstIteration := true
-	containerRequiresDevice := false
+	//containerRequiresDevice := false
+	deviceManagerHints := make(map[string][]topologymanager.TopologyHint)
 
 	for resourceObj, amountObj := range container.Resources.Requests {
 		resource := string(resourceObj)
 		amount := int64(amountObj.Value())
 		if m.isDevicePluginResource(resource) {
 			klog.Infof("[devicemanager-topology] %v is a resource managed by device manager.", resource)
-			containerRequiresDevice = true
+			//containerRequiresDevice = true
 			if _, ok := m.healthyDevices[resource]; !ok {
 				klog.Infof("[devicemanager-topology] No healthy devices for resource %v", resource)
 				continue
@@ -48,37 +46,27 @@ func (m *ManagerImpl) GetTopologyHints(pod v1.Pod, container v1.Container) []top
 			for socket, amountAvail := range deviceSocketAvail {
 				mask, _ := socketmask.NewSocketMask(int(socket))
 				if amountAvail >= amount {
-					if firstIteration {
-						tempMaskSet = append(tempMaskSet, topologymanager.TopologyHint{SocketAffinity: mask, Preferred: true})
-					} else {
-						isEqual := checkIfMaskEqualsStoreMask(deviceHints, mask)
-						if isEqual {
-							tempMaskSet = append(tempMaskSet, topologymanager.TopologyHint{SocketAffinity: mask, Preferred: true})
-						}
-					}
+					tempMaskSet = append(tempMaskSet, topologymanager.TopologyHint{SocketAffinity: mask, Preferred: true})
 				}
 				allDeviceSockets[int(socket)] = true
 			}
-			firstIteration = false
-			deviceHints = tempMaskSet
-			tempMaskSet = nil
-		}
-	}
-	klog.Infof("[devicemanager-topology] Moshe DeviceHints: %v", deviceHints)
-
-	if containerRequiresDevice {
-		if len(allDeviceSockets) > 1 {
-			var allDeviceSocketsInt []int
-			for socket := range allDeviceSockets {
-				allDeviceSocketsInt = append(allDeviceSocketsInt, socket)
+			if len(allDeviceSockets) > 1 {
+				var allDeviceSocketsInt []int
+				for socket := range allDeviceSockets {
+					allDeviceSocketsInt = append(allDeviceSocketsInt, socket)
+				}
+				crossSocketMask, _ := socketmask.NewSocketMask(allDeviceSocketsInt...)
+				preferred := len(tempMaskSet) == 0
+				tempMaskSet = append(tempMaskSet, topologymanager.TopologyHint{SocketAffinity: crossSocketMask, Preferred: preferred})
 			}
-			crossSocketMask, _ := socketmask.NewSocketMask(allDeviceSocketsInt...)
-			deviceHints = append(deviceHints, topologymanager.TopologyHint{SocketAffinity: crossSocketMask, Preferred: true})
+			deviceManagerHints[resource] = tempMaskSet
+			tempMaskSet = nil
+			klog.Infof("[devicemanager-topology] Resource: %s DeviceHints: %v", resource, deviceManagerHints[resource])
 		}
-		klog.Infof("[devicemanager-topology] DeviceHints: %v", deviceHints)
 	}
 
-	return deviceHints
+	klog.Infof("[devicemanager-topology]DeviceManagerHints: %v", deviceManagerHints)
+	return deviceManagerHints
 }
 
 func (m *ManagerImpl) getAvailableDevices(resource string) sets.String {

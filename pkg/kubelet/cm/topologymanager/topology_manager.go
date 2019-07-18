@@ -52,7 +52,7 @@ type manager struct {
 
 //HintProvider interface is to be implemented by Hint Providers
 type HintProvider interface {
-	GetTopologyHints(pod v1.Pod, container v1.Container) []TopologyHint
+	GetTopologyHints(pod v1.Pod, container v1.Container) map[string][]TopologyHint
 }
 
 //Store interface is to allow Hint Providers to retrieve pod affinity
@@ -124,23 +124,31 @@ func (m *manager) GetAffinity(podUID string, containerName string) TopologyHint 
 //                     provideryHints[-1][z]
 //                 }
 //                 callback(permutation)
-func (m *manager) iterateAllProviderTopologyHints(allProviderHints [][]TopologyHint, callback func([]TopologyHint)) {
+func (m *manager) iterateAllProviderTopologyHints(allProviderHints map[string][]TopologyHint, callback func(map[string]TopologyHint)) {
+
+	resources := make([]string, 0)
+	for resource := range allProviderHints {
+        resources = append(resources, resource)
+    }
+
 	// Internal helper function to accumulate the permutation before calling the callback.
-	var iterate func(i int, accum []TopologyHint)
-	iterate = func(i int, accum []TopologyHint) {
+	var iterate func(i int, resources []string, accum map[string]TopologyHint)
+	iterate = func(i int, resources []string, accum map[string]TopologyHint) {
 		// Base case: we have looped through all providers and have a full permutation.
-		if i == len(allProviderHints) {
+		if i == len(resources) {
 			callback(accum)
 			return
 		}
 
-		// Loop through all hints for provider 'i', and recurse to build the
+		// Loop through all hints for provider with resource 'i', and recurse to build the
 		// the permutation of this hint with all hints from providers 'i++'.
-		for j := range allProviderHints[i] {
-			iterate(i+1, append(accum, allProviderHints[i][j]))
+		resource := resources[i]
+		for j := range allProviderHints[resource] {
+			accum[resource] = allProviderHints[resource][j]
+			iterate(i+1, resources, accum)
 		}
 	}
-	iterate(0, []TopologyHint{})
+	iterate(0, resources, map[string]TopologyHint{})
 }
 
 // Merge the hints from all hint providers to find the best one.
@@ -155,22 +163,15 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 	// Loop through all hint providers and save an accumulated list of the
 	// hints returned by each hint provider. If no hints are provided, assume
 	// that provider has no preference for topology-aware allocation.
-	var allProviderHints [][]TopologyHint
+	allProviderHints := make(map[string][]TopologyHint)
 	for _, provider := range m.hintProviders {
 		// Get the TopologyHints from a provider.
-		hints := provider.GetTopologyHints(pod, container)
-
-		// If hints is nil, overwrite 'hints' with a preferred any-socket affinity.
-		if hints == nil {
-			klog.Infof("[topologymanager] Hint Provider has no preference for socket affinity")
-			affinity, _ := socketmask.NewSocketMask()
-			affinity.Fill()
-			hints = []TopologyHint{{affinity, true}}
+		providerHints := provider.GetTopologyHints(pod, container)
+		for resource, resourceHints := range providerHints {
+			allProviderHints[resource] = resourceHints
 		}
-
-		// Accumulate the sorted hints into a [][]TopologyHint slice
-		allProviderHints = append(allProviderHints, hints)
 	}
+	klog.Infof("[topologymanager] allProviderHints: %v", allProviderHints)
 
 	// Iterate over all permutations of hints in 'allProviderHints'. Merge the
 	// hints in each permutation by taking the bitwise-and of their affinity masks.
@@ -178,31 +179,8 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 	// permutations that have at least one socket set. If no merged mask can be
 	// found that has at least one socket set, return the 'defaultHint'.
 	bestHint := defaultHint
-	klog.Infof("Moshe BestHint1: %p", &bestHint)
-	m.iterateAllProviderTopologyHints(allProviderHints, func(permutation []TopologyHint) {
-		// Get the SocketAffinity from each hint in the permutation and see if any
-		// of them encode unpreferred allocations.
-		preferred := true
-		var socketAffinities []socketmask.SocketMask
-		for _, hint := range permutation {
-			// Only consider hints that have an actual SocketAffinity set.
-			if hint.SocketAffinity != nil {
-				if !hint.Preferred {
-					preferred = false
-				}
-				socketAffinities = append(socketAffinities, hint.SocketAffinity)
-			}
-		}
-
-		// Merge the affinities using a bitwise-and operation.
-		mergedAffinity, _ := socketmask.NewSocketMask()
-		mergedAffinity.Fill()
-		mergedAffinity.And(socketAffinities...)
-
-		// Build a mergedHintfrom the merged affinity mask, indicating if an
-		// preferred allocation was used to generate the affinity mask or not.
-		mergedHint := TopologyHint{mergedAffinity, preferred}
-
+	m.iterateAllProviderTopologyHints(allProviderHints, func(permutation map[string]TopologyHint) {
+		mergedHint := m.policy.Merge(permutation)
 		// Only consider mergedHints that result in a SocketAffinity > 0 to
 		// replace the current bestHint.
 		if mergedHint.SocketAffinity.Count() == 0 {
@@ -213,7 +191,6 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 		// preferred, always choose the preferred hint over the non-preferred one.
 		if mergedHint.Preferred && !bestHint.Preferred {
 			bestHint = mergedHint
-			klog.Infof("Moshe BestHint2: %p", &bestHint)
 			return
 		}
 
@@ -233,10 +210,7 @@ func (m *manager) calculateAffinity(pod v1.Pod, container v1.Container) Topology
 
 		// In all other cases, update bestHint to the current mergedHint
 		bestHint = mergedHint
-		klog.Infof("Moshe BestHint2: %p", &bestHint)
-		klog.Infof("Moshe: %v", mergedHint)
 	})
-	klog.Infof("Moshe BestHint3: %p", &bestHint)
 	klog.Infof("[topologymanager] ContainerTopologyHint: %v", bestHint)
 
 	return bestHint

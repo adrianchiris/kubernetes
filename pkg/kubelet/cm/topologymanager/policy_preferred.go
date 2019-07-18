@@ -17,6 +17,7 @@ limitations under the License.
 package topologymanager
 
 import (
+	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/socketmask"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 )
 
@@ -40,4 +41,29 @@ func (p *preferredPolicy) CanAdmitPodResult(admit bool) lifecycle.PodAdmitResult
 	return lifecycle.PodAdmitResult{
 		Admit: true,
 	}
+}
+
+func (p *preferredPolicy) Merge(permutation map[string]TopologyHint) TopologyHint {
+			// Get the SocketAffinity from each hint in the permutation and see if any
+		// of them encode unpreferred allocations.
+		preferred := true
+		var socketAffinities []socketmask.SocketMask
+		for _, hint := range permutation {
+			// Only consider hints that have an actual SocketAffinity set.
+			if hint.SocketAffinity != nil {
+				if !hint.Preferred {
+					preferred = false
+				}
+				socketAffinities = append(socketAffinities, hint.SocketAffinity)
+			}
+		}
+
+		// Merge the affinities using a bitwise-and operation.
+		mergedAffinity, _ := socketmask.NewSocketMask()
+		mergedAffinity.Fill()
+		mergedAffinity.And(socketAffinities...)
+
+		// Build a mergedHintfrom the merged affinity mask, indicating if an
+		// preferred allocation was used to generate the affinity mask or not.
+		return TopologyHint{mergedAffinity, preferred}
 }

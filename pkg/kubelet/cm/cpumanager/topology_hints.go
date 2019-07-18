@@ -27,14 +27,13 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/socketmask"
 )
 
-func (m *manager) GetTopologyHints(pod v1.Pod, container v1.Container) []topologymanager.TopologyHint {
-	var cpuHints []topologymanager.TopologyHint
+func (m *manager) GetTopologyHints(pod v1.Pod, container v1.Container) (cpuHints map[string][]topologymanager.TopologyHint) {
 	for resourceObj, amountObj := range container.Resources.Requests {
 		resource := string(resourceObj)
 		if resource != "cpu" {
 			continue
 		}
-
+		cpuHints = make(map[string][]topologymanager.TopologyHint, 1)
 		// Get a count of how many CPUs have been requested
 		requested := int(amountObj.Value())
 		klog.Infof("[cpumanager] Guaranteed CPUs detected: %v", requested)
@@ -66,7 +65,7 @@ func (m *manager) GetTopologyHints(pod v1.Pod, container v1.Container) []topolog
 			mostCPUs := getMostCPUs(cpuAccumStandard, socketCount)
 
 			// Assign 'Preferred: true/false' values for each hint.
-			cpuHints = getCPUHintsPreferred(cpuHintsAffinity, requested, mostCPUs)
+			cpuHints["cpu"] = getCPUHintsPreferred(cpuHintsAffinity, requested, mostCPUs)
 		}
 	}
 	klog.Infof("[cpumanager] Topology Hints for pod: %v", cpuHints)
@@ -118,6 +117,7 @@ func getCPUHintsAffinity(cpusPerSocket []int, requested int) []topologymanager.T
 func getCPUHintsPreferred(cpuHints []topologymanager.TopologyHint, requested int, mostCPUs int) []topologymanager.TopologyHint {
 	// Check all hints for the hint with the lowest number of sockets (bestHint).
 	bestHint := cpuHints[0].SocketAffinity.Count()
+
 	for r := range cpuHints {
 		if cpuHints[r].SocketAffinity.Count() < bestHint {
 			bestHint = cpuHints[r].SocketAffinity.Count()
@@ -125,7 +125,7 @@ func getCPUHintsPreferred(cpuHints []topologymanager.TopologyHint, requested int
 	}
 	// Iterate over all hints and set 'Preferred: true/false' for each hint
 	for r := range cpuHints {
-		if cpuHints[r].SocketAffinity.Count() <= bestHint && requested <= mostCPUs {
+		if cpuHints[r].SocketAffinity.Count() <= bestHint {
 			// In the event that the hint has a lower or equal number of sockets to bestHint
 			// and one or more of those sockets could individually satisfy the number of CPUs
 			// requested, assuming all CPUs on the socket (minus reserved CPUs) are available,

@@ -26,4 +26,6 @@ type Policy interface {
 	Name() string
 	//Returns Pod Admit Handler Response based on hints and policy type
 	CanAdmitPodResult(admit bool) lifecycle.PodAdmitResult
+	// Returns mergedTopologyHint based on permutation of hints
+	Merge(permutation map[string]TopologyHint) TopologyHint
 }
